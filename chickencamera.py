@@ -1,20 +1,25 @@
+# importing libraries
 import cv2
 import time
 import os
 from ultralytics import YOLO
 import numpy as np
 import math
+import matplotlib.pyplot as plt
 
 # Configuration - Optimized for chicken detection
-USE_YOLO12 = False  # YOLO11 is faster
-CONFIDENCE_THRESHOLD = 0.05  # Increased for better reliability
+USE_YOLO12 = True  # YOLO11 is faster
+CONFIDENCE_THRESHOLD = 0.09  # Increased for better reliability
 SAVE_OUTPUT_VIDEO = True
 OUTPUT_VIDEO_PATH = 'chicken_detection_output.mp4'
 FRAME_SKIP = 1  # Process every frame for better tracking
-TextShow = True  # Show text overlays on video
+TextShow = False  # Show text overlays on video
 
 # Video source
 VIDEO_SOURCE = 'test-data/RECORDING.mp4'
+
+# VIDEO_SOURCE = 'test-data/YELLOW-recording.mp4'
+
 
 # ROI (Region of Interest) Configuration
 USE_ROI = True  # Set to False to analyze full frame
@@ -48,6 +53,8 @@ class ChickenTracker:
         # Get chicken centers from detections
         current_detections = []
         for detection in detections:
+            if detection['name'] not in POULTRY_CLASSES:
+                print('Skipping non-poultry detection:', detection['name'])
             if detection['name'] in POULTRY_CLASSES:
                 x1, y1, x2, y2 = detection['box']
                 center = ((x1 + x2) // 2, (y1 + y2) // 2)
@@ -422,18 +429,40 @@ def setup_video_capture(source):
     
     return cap, frame_width, frame_height, fps
 
+def darken_frame(frame, darkness_factor=0.7):
+    """
+    Darken the frame before detection
+    darkness_factor: 0.0 = completely black, 1.0 = no change, values > 1.0 = brighter
+    """
+    # Method 1: Simple multiplication (fastest)
+    darkened = cv2.multiply(frame, darkness_factor)
+    
+    # Method 2: Alternative using addWeighted for more control
+    # darkened = cv2.addWeighted(frame, darkness_factor, np.zeros(frame.shape, frame.dtype), 0, 0)
+    
+    # Method 3: Using HSV to adjust only brightness/value channel
+    # hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    # hsv[:, :, 2] = hsv[:, :, 2] * darkness_factor  # Adjust V (brightness) channel
+    # darkened = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    
+    return darkened.astype(np.uint8)
+
 def process_frame_with_roi(frame, model, model_name, frame_width, frame_height, frame_number, confidence_threshold):
     """Process frame with improved ROI support and robust tracking"""
     global tracker
     
-    # Extract ROI or use full frame
-    roi_frame, (offset_x, offset_y) = extract_roi(frame, ROI_COORDS)
+    # DARKEN THE FRAME BEFORE ANY PROCESSING
+    # Adjust darkness_factor as needed: 0.5 = half brightness, 0.3 = quite dark
+    darkened_frame = darken_frame(frame, darkness_factor=0.6)
+    
+    # Extract ROI or use full frame (now using darkened frame)
+    roi_frame, (offset_x, offset_y) = extract_roi(darkened_frame, ROI_COORDS)
     
     if roi_frame.size == 0:
         print("Warning: ROI is empty, using full frame")
-        roi_frame, (offset_x, offset_y) = frame, (0, 0)
+        roi_frame, (offset_x, offset_y) = darkened_frame, (0, 0)
     
-    # Run detection on ROI
+    # Run detection on darkened ROI
     try:
         results = model(roi_frame, conf=confidence_threshold, verbose=False, imgsz=640)
         detections = results[0]
@@ -441,7 +470,7 @@ def process_frame_with_roi(frame, model, model_name, frame_width, frame_height, 
         print(f"Detection error: {e}")
         detections = None
     
-    # Process detections
+    # Process detections (rest of the function remains the same)
     poultry_count = 0
     all_detections = []
     class_counts = {}
@@ -470,7 +499,8 @@ def process_frame_with_roi(frame, model, model_name, frame_width, frame_height, 
                 if class_name in POULTRY_CLASSES:
                     poultry_count += 1
                     
-                    # Draw detection box
+                    # Draw detection box ON THE ORIGINAL FRAME (not darkened)
+                    # This way the UI elements remain visible
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     
                     # Draw confidence
@@ -539,6 +569,10 @@ def process_frame_with_roi(frame, model, model_name, frame_width, frame_height, 
     
     cv2.putText(frame, f'Frame: {frame_number}', 
                (10, frame_height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    
+    # Add darkening indicator
+    cv2.putText(frame, 'DARKENED FOR DETECTION', 
+               (frame_width - 250, frame_height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
     
     return frame, poultry_count, all_detections, class_counts
 
@@ -644,7 +678,44 @@ def main():
                 if out:
                     out.write(processed_frame)
                 
-                cv2.imshow('Interactive Chicken Counter', processed_frame)
+                #Plot the original image
+                # plt.subplot(1, 2, 1)
+                # plt.title("Original")
+                # plt.imshow(image)
+
+                # Adjust the brightness and contrast
+                # Adjusts the brightness by adding 10 to each pixel value
+                # brightness = 0.001 
+                # # Adjusts the contrast by scaling the pixel values by 2.3
+                # contrast = 1.3  
+                # image2 = cv2.addWeighted(processed_frame, contrast, np.zeros(processed_frame.shape, processed_frame.dtype), 0, brightness)
+
+                
+                # Convert the image from BGR to HSV color space
+                image = cv2.cvtColor(processed_frame, cv2.COLOR_RGB2HSV)
+
+                # Adjust the hue, saturation, and value of the image
+                # Adjusts the hue by multiplying it by 0.7
+                image[:, :, 0] = image[:, :, 0] * 0.7
+                # Adjusts the saturation by multiplying it by 1.5
+                image[:, :, 1] = image[:, :, 1] * 1.5
+                # Adjusts the value by multiplying it by 0.5
+                image[:, :, 2] = image[:, :, 2] * 0.5
+
+                # Convert the image back to BGR color space
+                image2 = cv2.cvtColor(image, cv2.COLOR_HSV2BGR)
+
+
+                #Save the image
+                # cv2.imwrite('modified_image.jpg', image2)
+                #Plot the contrast image
+                # plt.subplot(1, 2, 2)
+                # plt.title("Brightness & contrast")
+                # plt.imshow(image2)
+                # plt.show()
+
+                # cv2.imshow('Interactive Chicken Counter', processed_frame)
+                cv2.imshow('Interactive Chicken Counter', image2)
                 
                 # Progress reporting
                 if processed_frames % 30 == 0:  # Less frequent to reduce spam
