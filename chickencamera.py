@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 USE_YOLO12 = True  # YOLO11 is faster
 CONFIDENCE_THRESHOLD = 0.09  # Increased for better reliability
 SAVE_OUTPUT_VIDEO = True
-OUTPUT_VIDEO_PATH = 'chicken_detection_output.mp4'
+OUTPUT_VIDEO_PATH = 'processed-data/chicken_detection_output.mp4'
 FRAME_SKIP = 1  # Process every frame for better tracking
 TextShow = False  # Show text overlays on video
 
@@ -19,7 +19,6 @@ TextShow = False  # Show text overlays on video
 VIDEO_SOURCE = 'test-data/RECORDING.mp4'
 
 # VIDEO_SOURCE = 'test-data/YELLOW-recording.mp4'
-
 
 # ROI (Region of Interest) Configuration
 USE_ROI = True  # Set to False to analyze full frame
@@ -429,152 +428,6 @@ def setup_video_capture(source):
     
     return cap, frame_width, frame_height, fps
 
-def darken_frame(frame, darkness_factor=0.7):
-    """
-    Darken the frame before detection
-    darkness_factor: 0.0 = completely black, 1.0 = no change, values > 1.0 = brighter
-    """
-    # Method 1: Simple multiplication (fastest)
-    darkened = cv2.multiply(frame, darkness_factor)
-    
-    # Method 2: Alternative using addWeighted for more control
-    # darkened = cv2.addWeighted(frame, darkness_factor, np.zeros(frame.shape, frame.dtype), 0, 0)
-    
-    # Method 3: Using HSV to adjust only brightness/value channel
-    # hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    # hsv[:, :, 2] = hsv[:, :, 2] * darkness_factor  # Adjust V (brightness) channel
-    # darkened = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-    
-    return darkened.astype(np.uint8)
-
-def process_frame_with_roi(frame, model, model_name, frame_width, frame_height, frame_number, confidence_threshold):
-    """Process frame with improved ROI support and robust tracking"""
-    global tracker
-    
-    # DARKEN THE FRAME BEFORE ANY PROCESSING
-    # Adjust darkness_factor as needed: 0.5 = half brightness, 0.3 = quite dark
-    darkened_frame = darken_frame(frame, darkness_factor=0.6)
-    
-    # Extract ROI or use full frame (now using darkened frame)
-    roi_frame, (offset_x, offset_y) = extract_roi(darkened_frame, ROI_COORDS)
-    
-    if roi_frame.size == 0:
-        print("Warning: ROI is empty, using full frame")
-        roi_frame, (offset_x, offset_y) = darkened_frame, (0, 0)
-    
-    # Run detection on darkened ROI
-    try:
-        results = model(roi_frame, conf=confidence_threshold, verbose=False, imgsz=640)
-        detections = results[0]
-    except Exception as e:
-        print(f"Detection error: {e}")
-        detections = None
-    
-    # Process detections (rest of the function remains the same)
-    poultry_count = 0
-    all_detections = []
-    class_counts = {}
-    
-    if detections is not None and detections.boxes is not None:
-        for box in detections.boxes:
-            try:
-                class_id = int(box.cls[0])
-                class_name = model.names[class_id]
-                confidence = float(box.conf[0])
-                
-                # Get coordinates and adjust for ROI offset
-                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                x1 += offset_x
-                y1 += offset_y
-                x2 += offset_x
-                y2 += offset_y
-                
-                class_counts[class_name] = class_counts.get(class_name, 0) + 1
-                all_detections.append({
-                    'name': class_name,
-                    'confidence': confidence,
-                    'box': (x1, y1, x2, y2)
-                })
-                
-                if class_name in POULTRY_CLASSES:
-                    poultry_count += 1
-                    
-                    # Draw detection box ON THE ORIGINAL FRAME (not darkened)
-                    # This way the UI elements remain visible
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    
-                    # Draw confidence
-                    label = f'{class_name}: {confidence:.2f}'
-                    cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-                    
-            except Exception as e:
-                print(f"Error processing detection: {e}")
-                continue
-    
-    # Use the globally selected counting line points
-    line_point1 = COUNTING_LINE_POINT1
-    line_point2 = COUNTING_LINE_POINT2
-    
-    # Update tracking and count line crossings
-    try:
-        total_crossed = tracker.update(all_detections, line_point1, line_point2)
-    except Exception as e:
-        print(f"Tracking error: {e}")
-        total_crossed = tracker.crossing_count
-    
-    # Draw ROI boundary
-    if USE_ROI:
-        h, w = frame.shape[:2]
-        roi_x1 = int(ROI_COORDS[0] * w)
-        roi_y1 = int(ROI_COORDS[1] * h)
-        roi_x2 = int(ROI_COORDS[2] * w)
-        roi_y2 = int(ROI_COORDS[3] * h)
-        cv2.rectangle(frame, (roi_x1, roi_y1), (roi_x2, roi_y2), (255, 0, 255), 2)
-    
-    # Draw counting line using selected points
-    cv2.line(frame, line_point1, line_point2, (0, 0, 255), 4)
-    cv2.putText(frame, 'COUNTING LINE', (line_point1[0], line_point1[1]-10), 
-               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-    
-    # Draw line endpoints for reference
-    cv2.circle(frame, line_point1, 6, (255, 0, 0), -1)  # Blue circle at start
-    cv2.circle(frame, line_point2, 6, (0, 255, 255), -1)  # Cyan circle at end
-    
-    # Draw tracking visualization
-    tracker.draw_tracks(frame)
-    
-    # Text overlays
-    cv2.putText(frame, f'VISIBLE: {poultry_count}', (10, 30), 
-               cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-    
-    cv2.putText(frame, f'CROSSED: {total_crossed}', (10, 70), 
-               cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-    
-    cv2.putText(frame, f'TRACKS: {len(tracker.tracks)}', (10, 110), 
-               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-    
-    roi_text = f"ROI: {'ON' if USE_ROI else 'OFF'}"
-    cv2.putText(frame, roi_text, (10, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
-    
-    # Detection breakdown
-    y_offset = 170
-    for class_name, count in class_counts.items():
-        if class_name in POULTRY_CLASSES:
-            cv2.putText(frame, f'{class_name}: {count}', (10, y_offset), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-            y_offset += 20
-    
-    cv2.putText(frame, f'{model_name} | Conf: {confidence_threshold}', 
-               (10, frame_height - 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-    
-    cv2.putText(frame, f'Frame: {frame_number}', 
-               (10, frame_height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-    
-    # Add darkening indicator
-    cv2.putText(frame, 'DARKENED FOR DETECTION', 
-               (frame_width - 250, frame_height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
-    
-    return frame, poultry_count, all_detections, class_counts
 
 def main():
     """Main function with robust error handling and interactive line selection"""
