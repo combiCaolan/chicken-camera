@@ -1,23 +1,24 @@
-## Counting live poultry on a conveyor belt using computer vision
+# Counting live poultry on a conveyor belt using computer vision
 
-### Abstract
+## Abstract
+
 This project aims to provide numerous solutions for reliably counting live chickens on a moving conveyor belt using computer vision
 
-### Improvements
+## Improvements
 
-### Licence
+## Licence
 
-### Hardware
+## Hardware
 
 As of the time of writing of this README there has been no commitement to particular hardware, bar the usual requirements of a high speed, industrial environment, the technology choosen may be picked based on a development 
 
-### References
+## References
 
-### Contact
+## Contact
 
 Software Developer:
 caolan.maguire@combilift.com
 
-### Languages & Frameworks
+## Languages & Frameworks
 Languages: Python
 Frameworks/Libraries: Opencv, numpy, matplotlib, ultralytics, sklearn
