@@ -1,3 +1,11 @@
+'''
+Interactive ROI selection and chicken counting with multiple methods.
+This module allows users to select regions of interest (ROI) in images and apply various
+background subtraction methods to count chickens in those regions.
+
+Most successful approach I've developed so far.
+'''
+
 import cv2
 import numpy as np
 import os
@@ -993,10 +1001,10 @@ class VideoChickenProcessor:
 
 def main():
     # Configuration - UPDATE THESE PATHS
-    background_image_path = '../../test-data/toremove.png'      # Your background image
-    reference_image_path = '../../test-data/nottoremove.png'    # Reference image for ROI/method selection
-    video_path = '../../test-data/REALISTIC-RECORDING.mp4'            # Your input video
-    output_video_path = '../../output/approach2.mp4'  # Optional: save processed video
+    background_image_path = '../../test-data/photos/toremove.png'      # Your background image
+    reference_image_path = '../../test-data/photos/nottoremove.png'    # Reference image for ROI/method selection
+    video_path = '../../test-data/videos/REALISTIC-RECORDING.mp4'            # Your input video
+    output_video_path = '../../output/videos/approach2.mp4'  # Optional: save processed video
     
     try:
         print("Enhanced Chicken Detection with Tracking & Segmentation Window")
@@ -1019,7 +1027,7 @@ def main():
             video_path=video_path,
             output_path=output_video_path,
             show_realtime=True,
-            frame_delay=20
+            frame_delay=500
         )
         
     except Exception as e:

@@ -971,7 +971,7 @@ class InteractiveChickenTuner:
 def main():
     """Main function to start the interactive tuner"""
     # Change this to your image path
-    image_path = '../../test-data/REALISTIC-PHOTO.png'
+    image_path = '../../test-data/photos/REALISTIC-PHOTO.png'
     
     try:
         # Create and run the tuner
