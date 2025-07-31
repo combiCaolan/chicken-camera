@@ -1,3 +1,8 @@
+'''
+Approach of this solution is to only involve an area of interest which is selected by the user at the start of the programme.
+This application shows a threshold tester for the user to have been demonstrated what those parameters changes the image for later processing.
+'''
+
 import cv2
 import numpy as np
 import json
@@ -966,7 +971,7 @@ class InteractiveChickenTuner:
 def main():
     """Main function to start the interactive tuner"""
     # Change this to your image path
-    image_path = 'test-data/REALISTIC-PHOTO.png'
+    image_path = '../../test-data/REALISTIC-PHOTO.png'
     
     try:
         # Create and run the tuner

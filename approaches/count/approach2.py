@@ -993,10 +993,10 @@ class VideoChickenProcessor:
 
 def main():
     # Configuration - UPDATE THESE PATHS
-    background_image_path = 'test-data/toremove.png'      # Your background image
-    reference_image_path = 'test-data/nottoremove.png'    # Reference image for ROI/method selection
-    video_path = 'test-data/REALISTIC-RECORDING.mp4'            # Your input video
-    output_video_path = 'output/processed_chicken_video.mp4'  # Optional: save processed video
+    background_image_path = '../../test-data/toremove.png'      # Your background image
+    reference_image_path = '../../test-data/nottoremove.png'    # Reference image for ROI/method selection
+    video_path = '../../test-data/REALISTIC-RECORDING.mp4'            # Your input video
+    output_video_path = '../../output/approach2.mp4'  # Optional: save processed video
     
     try:
         print("Enhanced Chicken Detection with Tracking & Segmentation Window")
