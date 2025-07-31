@@ -14,7 +14,7 @@ This project aims to provide numerous solutions for reliably counting live chick
 
 ## Hardware
 
-As of the time of writing of this README there has been no commitement to particular hardware, bar the usual requirements of a high speed, industrial environment, the technology choosen may be picked based on a development 
+As of the time of writing of this README there has been no commitement to particular hardware, bar the usual requirements of a high speed, industrial environment, the technology choosen may be picked based on whatever equipment becomes available during development.
 
 ## References
 
