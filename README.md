@@ -1,3 +1,5 @@
+<img src="https://combilift.com/wp-content/uploads/2023/09/combilfit-25.png" width="480"/>
+
 # Counting live poultry on a conveyor belt using computer vision
 
 ## Abstract
