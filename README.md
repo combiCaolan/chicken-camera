@@ -1,5 +1,7 @@
 <img src="https://combilift.com/wp-content/uploads/2023/09/combilfit-25.png" width="480"/>
 
+<img src="https://github.com/combiCaolan/chicken-camera/blob/main/.github/example.drawio.png" />
+
 # Counting live poultry on a conveyor belt using computer vision
 
 ## Abstract
