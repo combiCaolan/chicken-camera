@@ -145,7 +145,7 @@ class InteractiveROISelector:
 class ROIBackgroundSubtractor:
     def __init__(self):
         # Simple cleanup parameter - just remove small noise
-        self.min_component_area = 200      # Remove components smaller than this (chickens are large)
+        self.min_component_area = 400      # Remove components smaller than this (chickens are large)
         
         # Area-based estimation parameters
         self.single_chicken_areas = []     # Store areas of likely single chickens
@@ -155,8 +155,8 @@ class ROIBackgroundSubtractor:
         # NEW: Chicken tracking for incremental IDs
         self.tracked_chickens = []         # List of tracked chicken objects
         self.next_chicken_id = 1           # Next ID to assign to a new chicken
-        self.max_tracking_distance = 150   # Max distance to consider same chicken between frames
-        self.frames_before_removal = 10    # Remove chicken if not seen for this many frames
+        self.max_tracking_distance = 250   # Max distance to consider same chicken between frames
+        self.frames_before_removal = 5    # Remove chicken if not seen for this many frames
         pass
     
     def remove_small_components(self, binary_mask, min_area=200, debug=False):
