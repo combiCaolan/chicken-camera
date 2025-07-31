@@ -142,7 +142,13 @@ class ROIBackgroundSubtractor:
         # Area-based estimation parameters
         self.single_chicken_areas = []     # Store areas of likely single chickens
         self.average_chicken_area = 1700   # Default estimate, will be updated
-        self.max_single_chicken_area = 2000  # Areas above this are likely multiple chickens
+        self.max_single_chicken_area = 16000  # Areas above this are likely multiple chickens
+        
+        # NEW: Chicken tracking for incremental IDs
+        self.tracked_chickens = []         # List of tracked chicken objects
+        self.next_chicken_id = 1           # Next ID to assign to a new chicken
+        self.max_tracking_distance = 150   # Max distance to consider same chicken between frames
+        self.frames_before_removal = 10    # Remove chicken if not seen for this many frames
         pass
     
     def remove_small_components(self, binary_mask, min_area=200, debug=False):
@@ -256,8 +262,290 @@ class ROIBackgroundSubtractor:
         
         return diff, binary_cleaned
     
-
+    class TrackedChicken:
+        """Class to represent a tracked chicken with persistent ID"""
+        def __init__(self, chicken_id, centroid, area, contour, extreme_points):
+            self.id = chicken_id
+            self.centroid = centroid
+            self.area = area
+            self.contour = contour
+            self.extreme_points = extreme_points
+            self.frames_since_seen = 0
+            self.total_detections = 1
+            self.first_seen_frame = None
     
+    def update_chicken_tracking(self, current_detections, current_frame):
+        """
+        Update chicken tracking with current frame detections.
+        Assigns persistent IDs to chickens across frames.
+        
+        Args:
+            current_detections: List of chicken detection data for current frame
+            current_frame: Current frame number
+            
+        Returns:
+            List of tracked chicken data with persistent IDs
+        """
+        # Mark all existing chickens as not seen this frame
+        for chicken in self.tracked_chickens:
+            chicken.frames_since_seen += 1
+        
+        tracked_frame_data = []
+        
+        # Try to match each detection to existing tracked chickens
+        for detection in current_detections:
+            detection_centroid = detection['centroid']
+            best_match = None
+            best_distance = float('inf')
+            
+            # Find closest existing chicken
+            for tracked_chicken in self.tracked_chickens:
+                if tracked_chicken.frames_since_seen < self.frames_before_removal:
+                    distance = np.sqrt(
+                        (detection_centroid[0] - tracked_chicken.centroid[0])**2 + 
+                        (detection_centroid[1] - tracked_chicken.centroid[1])**2
+                    )
+                    
+                    if distance < self.max_tracking_distance and distance < best_distance:
+                        best_match = tracked_chicken
+                        best_distance = distance
+            
+            if best_match:
+                # Update existing chicken
+                best_match.centroid = detection_centroid
+                best_match.area = detection['area']
+                best_match.contour = detection['contour']
+                best_match.extreme_points = detection['extreme_points']
+                best_match.frames_since_seen = 0
+                best_match.total_detections += 1
+                
+                # Create tracked data for this frame
+                tracked_data = detection.copy()
+                tracked_data['persistent_id'] = best_match.id
+                tracked_data['total_detections'] = best_match.total_detections
+                tracked_data['first_seen_frame'] = best_match.first_seen_frame
+                tracked_frame_data.append(tracked_data)
+                
+            else:
+                # New chicken detected - assign new persistent ID
+                new_chicken = self.TrackedChicken(
+                    self.next_chicken_id,
+                    detection_centroid,
+                    detection['area'],
+                    detection['contour'],
+                    detection['extreme_points']
+                )
+                new_chicken.first_seen_frame = current_frame
+                
+                self.tracked_chickens.append(new_chicken)
+                
+                # Create tracked data for this frame
+                tracked_data = detection.copy()
+                tracked_data['persistent_id'] = self.next_chicken_id
+                tracked_data['total_detections'] = 1
+                tracked_data['first_seen_frame'] = current_frame
+                tracked_frame_data.append(tracked_data)
+                
+                print(f"NEW CHICKEN #{self.next_chicken_id} detected at frame {current_frame}!")
+                self.next_chicken_id += 1
+        
+        # Remove old chickens that haven't been seen for too long
+        self.tracked_chickens = [
+            chicken for chicken in self.tracked_chickens 
+            if chicken.frames_since_seen < self.frames_before_removal
+        ]
+        
+        return tracked_frame_data
+
+    # def find_contours_and_extreme_points(self, binary_image, roi_mask, current_frame=0):
+    def find_contours_and_extreme_points(self, binary_image, roi_mask, current_frame=0):
+        """
+        Find contours and extract extreme points (furthest outward points) from binary mask.
+        Now includes chicken tracking with persistent IDs.
+        
+        Args:
+            binary_image: Binary mask of detected chickens
+            roi_mask: ROI mask to limit analysis area
+            current_frame: Current frame number for tracking
+            
+        Returns:
+            List of dictionaries containing contour data, extreme points, and persistent IDs
+        """
+        # Apply ROI mask to binary result
+        binary_roi = cv2.bitwise_and(binary_image, binary_image, mask=roi_mask)
+        
+        # Find contours
+        contours, _ = cv2.findContours(binary_roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Filter out extremely large areas that are clearly not chickens
+        max_reasonable_area = 25000
+        min_reasonable_area = self.min_component_area
+        
+        current_detections = []
+        
+        for i, contour in enumerate(contours):
+            area = cv2.contourArea(contour)
+            
+            if min_reasonable_area <= area <= max_reasonable_area:
+                # Find extreme points - furthest outward points on the contour
+                if len(contour) > 0:
+                    # Find the furthest points in each direction
+                    leftmost = tuple(contour[contour[:, :, 0].argmin()][0])
+                    rightmost = tuple(contour[contour[:, :, 0].argmax()][0])
+                    topmost = tuple(contour[contour[:, :, 1].argmin()][0])
+                    bottommost = tuple(contour[contour[:, :, 1].argmax()][0])
+                    
+                    # Calculate centroid
+                    M = cv2.moments(contour)
+                    if M["m00"] != 0:
+                        centroid = (int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"]))
+                    else:
+                        # Fallback to bounding box center
+                        x, y, w, h = cv2.boundingRect(contour)
+                        centroid = (x + w//2, y + h//2)
+                    
+                    # Estimate number of chickens based on area
+                    if area <= self.max_single_chicken_area:
+                        estimated_chickens = 1
+                        self.single_chicken_areas.append(area)
+                        if len(self.single_chicken_areas) > 50:
+                            self.single_chicken_areas = self.single_chicken_areas[-50:]
+                        self.average_chicken_area = sum(self.single_chicken_areas) / len(self.single_chicken_areas)
+                    else:
+                        estimated_chickens = max(1, round(area / self.average_chicken_area))
+                    
+                    # Store detection data (without persistent ID yet)
+                    detection_info = {
+                        'temp_id': i,  # Temporary ID for this frame
+                        'contour': contour,
+                        'area': area,
+                        'centroid': centroid,
+                        'estimated_chickens': estimated_chickens,
+                        'extreme_points': {
+                            'leftmost': leftmost,
+                            'rightmost': rightmost,
+                            'topmost': topmost,
+                            'bottommost': bottommost
+                        },
+                        'bounding_rect': cv2.boundingRect(contour)
+                    }
+                    
+                    current_detections.append(detection_info)
+        
+        # Now apply tracking to assign persistent IDs
+        tracked_chickens = self.update_chicken_tracking(current_detections, current_frame)
+        
+        return tracked_chickens
+    
+    def create_segmentation_overlay(self, original_color_frame, chicken_data, roi_mask, current_frame=0):
+        """
+        Create segmentation overlay showing chickens with extreme points marked.
+        Now shows persistent tracking IDs instead of per-frame counts.
+        
+        Args:
+            original_color_frame: Original color video frame
+            chicken_data: List of tracked chicken detection data with persistent IDs
+            roi_mask: ROI mask
+            current_frame: Current frame number
+            
+        Returns:
+            Color frame with segmentation overlay and total unique chickens seen
+        """
+        # Create overlay on original frame
+        segmentation_frame = original_color_frame.copy()
+        
+        # Show ROI area with slight blue tint
+        roi_color = cv2.cvtColor(roi_mask, cv2.COLOR_GRAY2BGR)
+        roi_color[:, :, 0] = roi_mask  # Blue channel
+        roi_color[:, :, 1] = 0         # Green channel
+        roi_color[:, :, 2] = 0         # Red channel
+        segmentation_frame = cv2.addWeighted(segmentation_frame, 0.9, roi_color, 0.1, 0)
+        
+        total_chickens_in_frame = 0
+        
+        # Draw each chicken's segmentation and extreme points with persistent IDs
+        for chicken in chicken_data:
+            contour = chicken['contour']
+            extreme_points = chicken['extreme_points']
+            centroid = chicken['centroid']
+            area = chicken['area']
+            estimated_chickens = chicken['estimated_chickens']
+            persistent_id = chicken['persistent_id']
+            total_detections = chicken['total_detections']
+            first_seen = chicken['first_seen_frame']
+            
+            total_chickens_in_frame += estimated_chickens
+            
+            # Draw filled contour with transparency
+            contour_overlay = np.zeros_like(segmentation_frame)
+            if estimated_chickens == 1:
+                cv2.fillPoly(contour_overlay, [contour], (0, 255, 0))  # Green for single chicken
+                contour_color = (0, 255, 0)
+            else:
+                cv2.fillPoly(contour_overlay, [contour], (0, 255, 255))  # Yellow for multiple chickens
+                contour_color = (0, 255, 255)
+            
+            # Blend the filled contour
+            segmentation_frame = cv2.addWeighted(segmentation_frame, 0.8, contour_overlay, 0.2, 0)
+            
+            # Draw contour outline
+            cv2.drawContours(segmentation_frame, [contour], -1, contour_color, 2)
+            
+            # Draw extreme points with different colors - these show the furthest outward points
+            point_size = 6
+            cv2.circle(segmentation_frame, extreme_points['leftmost'], point_size, (255, 0, 0), -1)    # Blue - leftmost
+            cv2.circle(segmentation_frame, extreme_points['rightmost'], point_size, (0, 0, 255), -1)   # Red - rightmost
+            cv2.circle(segmentation_frame, extreme_points['topmost'], point_size, (255, 255, 0), -1)   # Cyan - topmost
+            cv2.circle(segmentation_frame, extreme_points['bottommost'], point_size, (0, 255, 255), -1) # Yellow - bottommost
+            
+            # Draw centroid
+            cv2.circle(segmentation_frame, centroid, 4, (255, 255, 255), -1)  # White center
+            
+            # Draw bounding box
+            x, y, w, h = chicken['bounding_rect']
+            cv2.rectangle(segmentation_frame, (x, y), (x + w, y + h), (255, 0, 255), 1)
+            
+            # Add persistent chicken ID and tracking info
+            cv2.putText(segmentation_frame, f'ID #{persistent_id}', 
+                       (centroid[0] - 15, centroid[1] - 25),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            
+            # Add detection count for this chicken
+            cv2.putText(segmentation_frame, f'Seen: {total_detections}x', 
+                       (centroid[0] - 20, centroid[1] - 5),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+            
+            if estimated_chickens > 1:
+                cv2.putText(segmentation_frame, f'{estimated_chickens}ch', 
+                           (centroid[0] - 10, centroid[1] + 15),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        
+        # Add title and statistics
+        cv2.putText(segmentation_frame, 'Chicken Tracking with Extreme Points', (10, 25), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.putText(segmentation_frame, f'Frame: {current_frame} | In Frame: {total_chickens_in_frame}', (10, 50), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(segmentation_frame, f'Total Unique Chickens Seen: {self.next_chicken_id - 1}', (10, 75), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(segmentation_frame, f'Currently Tracking: {len(self.tracked_chickens)}', (10, 100), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # Legend for extreme points
+        legend_y = 125
+        cv2.circle(segmentation_frame, (20, legend_y), 4, (255, 0, 0), -1)
+        cv2.putText(segmentation_frame, 'Leftmost', (30, legend_y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        
+        cv2.circle(segmentation_frame, (120, legend_y), 4, (0, 0, 255), -1)
+        cv2.putText(segmentation_frame, 'Rightmost', (130, legend_y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        
+        cv2.circle(segmentation_frame, (220, legend_y), 4, (255, 255, 0), -1)
+        cv2.putText(segmentation_frame, 'Topmost', (230, legend_y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        
+        cv2.circle(segmentation_frame, (310, legend_y), 4, (0, 255, 255), -1)
+        cv2.putText(segmentation_frame, 'Bottommost', (320, legend_y + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        
+        return segmentation_frame, total_chickens_in_frame
+
     def find_and_count_chickens(self, binary_image, original_image, roi_mask):
         """Find contours and count chickens using area-based estimation for touching chickens"""
         # Apply ROI mask to binary result to ensure we only count in selected areas
@@ -441,6 +729,31 @@ class VideoChickenProcessor:
         
         return True
     
+    def adjust_tracking_parameters(self):
+        """Interactive adjustment of chicken tracking parameters"""
+        print("\nAdjust Chicken Tracking Parameters")
+        print("=" * 40)
+        print(f"Current max_tracking_distance: {self.processor.max_tracking_distance}")
+        print("(Maximum pixel distance to consider same chicken between frames)")
+        print(f"Current frames_before_removal: {self.processor.frames_before_removal}")
+        print("(Remove chicken from tracking if not seen for this many frames)")
+        
+        try:
+            new_distance = input(f"New max_tracking_distance (current: {self.processor.max_tracking_distance}): ").strip()
+            if new_distance:
+                self.processor.max_tracking_distance = int(new_distance)
+                print(f"Updated tracking distance to: {self.processor.max_tracking_distance}")
+            
+            new_frames = input(f"New frames_before_removal (current: {self.processor.frames_before_removal}): ").strip()
+            if new_frames:
+                self.processor.frames_before_removal = int(new_frames)
+                print(f"Updated frames before removal to: {self.processor.frames_before_removal}")
+                
+        except ValueError:
+            print("Invalid input, keeping current values")
+        
+        print(f"Tracking: distance={self.processor.max_tracking_distance}, removal={self.processor.frames_before_removal}")
+
     def adjust_cleanup_parameters(self):
         """Interactive adjustment of small component removal threshold"""
         print("\nAdjust Small Component Removal Threshold")
@@ -495,12 +808,20 @@ class VideoChickenProcessor:
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
         
-        # Setup display windows
+        # Setup display windows - NOW INCLUDING THE NEW SEGMENTATION WINDOW
         if show_realtime:
             cv2.namedWindow('Original Video', cv2.WINDOW_AUTOSIZE)
             cv2.namedWindow('Chicken Detection', cv2.WINDOW_AUTOSIZE)
+            cv2.namedWindow('Chicken Segmentation', cv2.WINDOW_AUTOSIZE)  # NEW WINDOW
             cv2.namedWindow('Binary Mask (Small Components Removed)', cv2.WINDOW_AUTOSIZE)
             cv2.namedWindow('Color Difference', cv2.WINDOW_AUTOSIZE)
+            
+            # Position windows for better layout
+            cv2.moveWindow('Original Video', 50, 50)
+            cv2.moveWindow('Chicken Segmentation', 650, 50)  # NEW WINDOW position
+            cv2.moveWindow('Chicken Detection', 1250, 50)
+            cv2.moveWindow('Binary Mask (Small Components Removed)', 50, 450)
+            cv2.moveWindow('Color Difference', 650, 450)
         
         # Process frames
         self.frame_count = 0
@@ -508,9 +829,11 @@ class VideoChickenProcessor:
         self.chicken_counts = []
         
         print("\nProcessing frames...")
-        print("Windows: Original | Detection | Binary Mask (Small Components Removed) | Color Difference")
+        print("Windows: Original | Segmentation (WITH TRACKING) | Detection | Binary Mask | Color Difference")
         print("Controls: SPACE=pause, 'q'=quit, 's'=save frame, '+'=speed up, '-'=slow down")
-        print("          'p'=adjust small component threshold")
+        print("          'p'=adjust small component threshold, 't'=adjust tracking distance")
+        print("NOTE: Each new chicken gets a unique incremental ID (ID #1, ID #2, etc.)")
+        print("      'Total Unique Chickens Seen' shows cumulative count of different chickens")
         
         while True:
             ret, frame = cap.read()
@@ -533,37 +856,50 @@ class VideoChickenProcessor:
             # Apply chosen method (now returns cleaned binary)
             diff, binary_cleaned = self.chosen_method(masked_background, masked_frame)
             
+            # NEW: Find contours and extreme points for segmentation WITH TRACKING
+            chicken_data = self.processor.find_contours_and_extreme_points(binary_cleaned, self.roi_mask, self.frame_count)
+            
+            # NEW: Create segmentation overlay with extreme points AND PERSISTENT IDs
+            segmentation_frame, segmentation_chicken_count = self.processor.create_segmentation_overlay(frame, chicken_data, self.roi_mask, self.frame_count)
+            
             # Create color difference visualization
             color_diff = self.create_color_difference_visualization(frame, binary_cleaned, self.roi_mask)
             
-            # Find and count chickens
+            # Original: Find and count chickens for the detection window
             result_frame, chicken_count = self.processor.find_and_count_chickens(binary_cleaned, gray_frame, self.roi_mask)
             
-            # Update statistics
-            self.chicken_counts.append(chicken_count)
-            self.total_chickens += chicken_count
+            # Update statistics (use segmentation count as it's more detailed)
+            self.chicken_counts.append(segmentation_chicken_count)
+            self.total_chickens += segmentation_chicken_count
             
-            # Add frame info
-            cv2.putText(result_frame, f'Frame: {self.frame_count}', (10, 60), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.putText(result_frame, f'Method: {self.method_name}', (10, 85), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            # Add frame info to all windows
+            frame_info = f'Frame: {self.frame_count}'
+            method_info = f'Method: {self.method_name}'
+            
+            # Original video frame info
+            cv2.putText(frame, frame_info, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(frame, method_info, (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            
+            # Detection frame info
+            cv2.putText(result_frame, frame_info, (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(result_frame, method_info, (10, 125), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
             
             # Show progress occasionally
             if self.frame_count % 1 == 0:
                 avg_chickens = np.mean(self.chicken_counts[-10:]) if len(self.chicken_counts) >= 10 else np.mean(self.chicken_counts) if self.chicken_counts else 0
-                print(f"Frame {self.frame_count}: {chicken_count} chickens (avg last 10: {avg_chickens:.1f})")
+                print(f"Frame {self.frame_count}: {segmentation_chicken_count} chickens (avg last 10: {avg_chickens:.1f})")
             
-            # Display frames
+            # Display frames - NOW INCLUDING THE NEW SEGMENTATION WINDOW
             if show_realtime:
                 cv2.imshow('Original Video', frame)
+                cv2.imshow('Chicken Segmentation', segmentation_frame)  # NEW WINDOW with extreme points
                 cv2.imshow('Chicken Detection', result_frame)
                 cv2.imshow('Binary Mask (Small Components Removed)', cv2.cvtColor(binary_cleaned, cv2.COLOR_GRAY2BGR))
                 cv2.imshow('Color Difference', color_diff)
             
-            # Save frame if writer is available
+            # Save frame if writer is available (save the segmentation frame as it's most informative)
             if writer:
-                writer.write(result_frame)
+                writer.write(segmentation_frame)
             
             # Handle controls with configurable delay
             key = cv2.waitKey(frame_delay) & 0xFF
@@ -574,13 +910,18 @@ class VideoChickenProcessor:
                 cv2.waitKey(0)
             elif key == ord('s') and show_realtime:  # Save current frame
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                frame_filename = f"chicken_frame_{timestamp}.jpg"
-                cv2.imwrite(frame_filename, result_frame)
-                print(f"Saved frame as {frame_filename}")
+                # Save both original detection and new segmentation frames
+                cv2.imwrite(f"chicken_detection_{timestamp}.jpg", result_frame)
+                cv2.imwrite(f"chicken_segmentation_{timestamp}.jpg", segmentation_frame)
+                print(f"Saved frames as chicken_detection_{timestamp}.jpg and chicken_segmentation_{timestamp}.jpg")
             elif key == ord('p'):  # Adjust parameters
                 print("Pausing to adjust small component removal threshold...")
                 self.adjust_cleanup_parameters()
                 print("Threshold updated. Processing continues...")
+            elif key == ord('t'):  # Adjust tracking parameters
+                print("Pausing to adjust chicken tracking parameters...")
+                self.adjust_tracking_parameters()
+                print("Tracking parameters updated. Processing continues...")
             elif key == ord('+') or key == ord('='):  # Speed up
                 frame_delay = max(1, frame_delay - 100)
                 print(f"Frame delay: {frame_delay}ms (faster)")
@@ -658,8 +999,11 @@ def main():
     output_video_path = 'output/processed_chicken_video.mp4'  # Optional: save processed video
     
     try:
-        print("Simple Chicken Detection with Small Component Removal")
-        print("=" * 50)
+        print("Enhanced Chicken Detection with Tracking & Segmentation Window")
+        print("=" * 60)
+        print("NEW: Chickens now get unique incremental IDs (#1, #2, #3, etc.)")
+        print("NEW: Each chicken is tracked across frames with persistent identity!")
+        print("NEW: Shows total unique chickens seen vs chickens currently in frame")
         
         # Initialize processor
         processor = VideoChickenProcessor(background_image_path)
@@ -670,12 +1014,12 @@ def main():
             print("Setup cancelled")
             return
         
-        # Process video with enhanced cleanup
+        # Process video with enhanced segmentation window
         processor.process_video(
             video_path=video_path,
             output_path=output_video_path,
             show_realtime=True,
-            frame_delay=100
+            frame_delay=20
         )
         
     except Exception as e:
