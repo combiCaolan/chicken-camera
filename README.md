@@ -24,5 +24,6 @@ Software Developer:
 caolan.maguire@combilift.com
 
 ## Languages & Frameworks
-Languages: Python
-Frameworks/Libraries: Opencv, numpy, matplotlib, ultralytics, sklearn
+**Languages:** Python
+
+**Frameworks/Libraries**: Opencv, numpy, matplotlib, ultralytics, sklearn
